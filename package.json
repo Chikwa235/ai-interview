@@ -11,8 +11,11 @@
   "dependencies": {
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/openai": "^3.0.41",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@hookform/resolvers": "^5.2.2",
     "@huggingface/inference": "^4.13.14",
+    "@mui/material": "^7.3.9",
     "@vapi-ai/web": "^2.5.2",
     "ai": "^6.0.94",
     "class-variance-authority": "^0.7.1",
