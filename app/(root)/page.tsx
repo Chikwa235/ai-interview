@@ -39,7 +39,9 @@ const page = () => {
 
         {/*<p>You have&apos;t taken any interviews yet</p>*/}
         </div>
+        
       </section>
+    
     </>
   )
 }
