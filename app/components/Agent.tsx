@@ -191,7 +191,7 @@ const Agent = ({
         console.log("Created interview doc:", res);
 
         if (res.success && res.interviewId) {
-          router.push(`/interview/${res.interviewId}`);
+          router.push("/");
         } else {
           router.push("/");
         }
