@@ -3,10 +3,16 @@ import  Link  from  "next/link"
 import  Image from "next/image"
 import {dummyInterviews} from "@/constants";
 import InterviewCard from "../components/InterviewCard";
+import { getCurrentUser, getInterviewsById } from "@/lib/actions/auth.action";
 
 
 
 const page = () => {
+  
+  const user = await getCurrentUser();
+  const userInterviews = await getInterviewsById(user?.id!);
+
+  const haspastInterviews = userInterviews?.length > 0
   return (
     <>
       <section className="card-cta">
@@ -24,9 +30,15 @@ const page = () => {
         <h2>Your interviews</h2>
 
         <div className="interviews-section flex flex-row gap-4">
-          {dummyInterviews.map((interview) => (
-            <InterviewCard {...interview} key={interview.id}/>
-          ))}
+          {
+          haspastInterviews ? (
+            userInterviews?.map((interview) => (
+              <InterviewCard {...interview} key={interview.id}/>
+            ))) : (
+              <p>You haven&apos;t taken any interviews yet</p>
+            )
+}
+          
         </div>
       </section>
 

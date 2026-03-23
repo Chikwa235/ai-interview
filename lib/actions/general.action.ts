@@ -69,7 +69,7 @@ Please score the candidate from 0 to 100 in the following areas. Do not add cate
  */
 export async function getInterviewById(id: string): Promise<Interview | null> {
   const interview = await db.collection("interviews").doc(id).get();
-  return interview.data() as Interview | null;
+  return (interview.data() as Interview) ?? null;
 }
 
 export async function getLatestInterviews(
@@ -128,7 +128,8 @@ export async function getFeedbackByInterviewId(
 }
 
 /**
- * INTERVIEWS (write) - Save generated questions
+ * (Optional legacy) INTERVIEWS (write) - Overwrite questions on an existing interview doc
+ * You can delete this later if you no longer use it.
  */
 export async function saveInterviewQuestions(params: {
   interviewId: string;
@@ -137,8 +138,6 @@ export async function saveInterviewQuestions(params: {
   const { interviewId, questions } = params;
 
   try {
-    console.log("saveInterviewQuestions called:", interviewId, questions.length);
-
     await db.collection("interviews").doc(interviewId).update({
       questions,
       finalized: true,
@@ -148,6 +147,35 @@ export async function saveInterviewQuestions(params: {
     return { success: true };
   } catch (error) {
     console.error("Error saving interview questions:", error);
+    return { success: false };
+  }
+}
+
+/**
+ * NEW: Each generated set becomes its own Interview document with a unique ID
+ * Path: interviews/{newInterviewId}
+ * Stores only userId + questions (+ timestamps)
+ */
+export async function createInterviewWithQuestions(params: {
+  userId: string;
+  questions: string[];
+}) {
+  const { userId, questions } = params;
+
+  try {
+    const interviewRef = db.collection("interviews").doc(); // NEW unique ID
+
+    await interviewRef.set({
+      userId,
+      questions,
+      finalized: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    return { success: true, interviewId: interviewRef.id };
+  } catch (error) {
+    console.error("Error creating interview with questions:", error);
     return { success: false };
   }
 }

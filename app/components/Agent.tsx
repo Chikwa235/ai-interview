@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { vapi } from "@/lib/vapi.sdk";
 import {
   createFeedback,
-  saveInterviewQuestions,
+  createInterviewWithQuestions,
 } from "@/lib/actions/general.action";
 
 enum CallStatus {
@@ -63,17 +63,14 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
     const t = raw.trim();
     const lower = t.toLowerCase();
 
-    // Stop at closing prompt (don’t save it)
     if (lower.includes("mock answer")) break;
 
-    // If we get just "1," or "1)" as its own message, it's a new question boundary
     if (isNumberToken(t)) {
       if (current && /\?\s*$/.test(current)) questions.push(current.trim());
       current = "";
       continue;
     }
 
-    // If it contains the number + text in the same chunk: "1) ...?"
     if (startsNumberedLine(t)) {
       if (current && /\?\s*$/.test(current)) questions.push(current.trim());
       current = t.replace(/^\d+[\)\,]\s*/, "").trim();
@@ -84,14 +81,12 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
       continue;
     }
 
-    // Continuation chunk: append to current buffer
     if (!current) {
       current = t;
     } else {
       current = `${current} ${t}`.replace(/\s+/g, " ").trim();
     }
 
-    // Commit when we reach a question mark
     if (/\?\s*$/.test(current)) {
       questions.push(current.trim());
       current = "";
@@ -168,36 +163,43 @@ const Agent = ({
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
+      // GENERATE MODE -> create a NEW interview doc with unique ID
       if (type === "generate") {
-        if (!interviewId) {
-          console.log("Missing interviewId. Cannot save generated questions.");
+        if (!userId) {
+          console.log("Missing userId. Cannot create interview doc.");
           router.push("/");
           return;
         }
 
         const extractedQuestions = extractQuestionsFromTranscript(messages);
 
-        console.log("Saving to interviewId:", interviewId);
         console.log("Extracted questions:", extractedQuestions);
 
-        // Prevent wiping DB with empty array
         if (extractedQuestions.length === 0) {
           console.log(
-            'No final questions found after "Here are your interview questions". Not updating Firebase.'
+            'No final questions found after "Here are your interview questions". Not creating a doc.'
           );
           router.push("/");
           return;
         }
 
-        await saveInterviewQuestions({
-          interviewId,
+        const res = await createInterviewWithQuestions({
+          userId,
           questions: extractedQuestions,
         });
 
-        router.push("/");
+        console.log("Created interview doc:", res);
+
+        if (res.success && res.interviewId) {
+          router.push(`/interview/${res.interviewId}`);
+        } else {
+          router.push("/");
+        }
+
         return;
       }
 
+      // OTHER MODE -> create feedback for an existing interview
       const { success, feedbackId: id } = await createFeedback({
         interviewId: interviewId!,
         userId: userId!,
