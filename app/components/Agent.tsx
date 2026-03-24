@@ -10,7 +10,6 @@ import {
   createFeedback,
   createInterviewWithQuestions,
 } from "@/lib/actions/general.action";
-
 enum CallStatus {
   INACTIVE = "INACTIVE",
   CONNECTING = "CONNECTING",
@@ -25,15 +24,6 @@ interface SavedMessage {
 
 const ASSISTANT_ID = "730f08f4-2641-4967-be8d-23d3c79d0eb3";
 
-/**
- * FLEXIBLE extractor:
- * - Finds marker: "Here are your interview questions" (accepts ":" or "." and any casing)
- * - Collects only AFTER marker
- * - Supports numbered tokens coming as:
- *   - "1) Question...?" in one chunk
- *   - "1," as its own chunk, then question split across multiple chunks
- * - Stops when it hits "mock answer"
- */
 function extractQuestionsFromTranscript(messages: SavedMessage[]) {
   const assistantMsgs = messages
     .filter((m) => m.role === "assistant")
@@ -56,8 +46,8 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
   const questions: string[] = [];
   let current = "";
 
-  const isNumberToken = (t: string) => /^\d+[\)\,]$/.test(t); // "1)" or "1,"
-  const startsNumberedLine = (t: string) => /^\d+[\)\,]\s+/.test(t); // "1) text" or "1, text"
+  const isNumberToken = (t: string) => /^\d+[\)\,]$/.test(t);
+  const startsNumberedLine = (t: string) => /^\d+[\)\,]\s+/.test(t);
 
   for (const raw of relevant) {
     const t = raw.trim();
@@ -81,11 +71,8 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
       continue;
     }
 
-    if (!current) {
-      current = t;
-    } else {
-      current = `${current} ${t}`.replace(/\s+/g, " ").trim();
-    }
+    if (!current) current = t;
+    else current = `${current} ${t}`.replace(/\s+/g, " ").trim();
 
     if (/\?\s*$/.test(current)) {
       questions.push(current.trim());
@@ -99,6 +86,57 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
     .filter((q) => /\?\s*$/.test(q));
 
   return Array.from(new Set(cleaned)).slice(0, 20);
+}
+
+/**
+ * Extract role + interviewType from the transcript.
+ * We find the assistant's prompts and the user's answers right after them.
+ */
+function extractRoleAndType(messages: SavedMessage[]) {
+  const msgs = messages
+    .map((m) => ({ ...m, content: (m.content ?? "").trim() }))
+    .filter((m) => m.content.length > 0);
+
+  const findUserAnswerAfterAssistantPrompt = (promptIncludes: string[]) => {
+    for (let i = 0; i < msgs.length - 1; i++) {
+      if (msgs[i].role !== "assistant") continue;
+      const a = msgs[i].content.toLowerCase();
+
+      if (promptIncludes.some((p) => a.includes(p))) {
+        // find next user message
+        for (let j = i + 1; j < msgs.length; j++) {
+          if (msgs[j].role === "user") return msgs[j].content;
+          // stop if assistant speaks again without user answering
+          if (msgs[j].role === "assistant") break;
+        }
+      }
+    }
+    return "";
+  };
+
+  const role = findUserAnswerAfterAssistantPrompt([
+    "what role are you interviewing for",
+    "what role are you applying for",
+    "what role is this interview for",
+  ]);
+
+  const interviewTypeRaw = findUserAnswerAfterAssistantPrompt([
+    "interview type",
+    "technical, behavioral, or mixed",
+    "technical or behavioral",
+  ]);
+
+  // Normalize type
+  const t = interviewTypeRaw.toLowerCase();
+  let interviewType = interviewTypeRaw;
+  if (t.includes("tech")) interviewType = "technical";
+  else if (t.includes("behav")) interviewType = "behavioral";
+  else if (t.includes("mix")) interviewType = "mixed";
+
+  return {
+    role: role || "Interview",
+    interviewType: interviewType || "mixed",
+  };
 }
 
 const Agent = ({
@@ -121,8 +159,6 @@ const Agent = ({
     const onCallEnd = () => setCallStatus(CallStatus.FINISHED);
 
     const onMessage = (message: any) => {
-      console.log("VAPI MESSAGE:", message);
-
       if (message?.type === "transcript" && message?.transcriptType === "final") {
         const newMessage: SavedMessage = {
           role: message.role,
@@ -163,43 +199,33 @@ const Agent = ({
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
-      // GENERATE MODE -> create a NEW interview doc with unique ID
       if (type === "generate") {
         if (!userId) {
-          console.log("Missing userId. Cannot create interview doc.");
           router.push("/");
           return;
         }
 
         const extractedQuestions = extractQuestionsFromTranscript(messages);
-
-        console.log("Extracted questions:", extractedQuestions);
-
         if (extractedQuestions.length === 0) {
-          console.log(
-            'No final questions found after "Here are your interview questions". Not creating a doc.'
-          );
           router.push("/");
           return;
         }
 
+        const { role, interviewType } = extractRoleAndType(messages);
+
         const res = await createInterviewWithQuestions({
           userId,
+          role,
+          interviewType,
           questions: extractedQuestions,
         });
 
-        console.log("Created interview doc:", res);
-
-        if (res.success && res.interviewId) {
-          router.push("/");
-        } else {
-          router.push("/");
-        }
+        if (res.success && res.interviewId) router.push("/");
+        else router.push("/");
 
         return;
       }
 
-      // OTHER MODE -> create feedback for an existing interview
       const { success, feedbackId: id } = await createFeedback({
         interviewId: interviewId!,
         userId: userId!,
@@ -207,12 +233,8 @@ const Agent = ({
         feedbackId,
       });
 
-      if (success && id) {
-        router.push(`/interview/${interviewId}/feedback`);
-      } else {
-        console.log("Error saving feedback");
-        router.push("/");
-      }
+      if (success && id) router.push(`/interview/${interviewId}/feedback`);
+      else router.push("/");
     };
 
     runOnFinish();
@@ -227,8 +249,8 @@ const Agent = ({
 
     await vapi.start(ASSISTANT_ID, {
       variableValues: {
-        username: userName ?? "",
-        userid: userId ?? "",
+        userName: userName ?? "",
+        userId: userId ?? "",
         interviewId: interviewId ?? "",
         type: type ?? "",
         questions: formattedQuestions,

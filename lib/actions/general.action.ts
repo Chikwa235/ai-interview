@@ -68,8 +68,15 @@ Please score the candidate from 0 to 100 in the following areas. Do not add cate
  * INTERVIEWS (read)
  */
 export async function getInterviewById(id: string): Promise<Interview | null> {
-  const interview = await db.collection("interviews").doc(id).get();
-  return (interview.data() as Interview) ?? null;
+  if (!id || typeof id !== "string" || id.trim().length === 0) {
+    console.error("getInterviewById called with invalid id:", id);
+    return null;
+  }
+
+  const docSnap = await db.collection("interviews").doc(id).get();
+  if (!docSnap.exists) return null;
+
+  return { id: docSnap.id, ...docSnap.data() } as Interview;
 }
 
 export async function getLatestInterviews(
@@ -128,8 +135,7 @@ export async function getFeedbackByInterviewId(
 }
 
 /**
- * (Optional legacy) INTERVIEWS (write) - Overwrite questions on an existing interview doc
- * You can delete this later if you no longer use it.
+ * (Optional legacy) INTERVIEWS (write)
  */
 export async function saveInterviewQuestions(params: {
   interviewId: string;
@@ -154,19 +160,23 @@ export async function saveInterviewQuestions(params: {
 /**
  * NEW: Each generated set becomes its own Interview document with a unique ID
  * Path: interviews/{newInterviewId}
- * Stores only userId + questions (+ timestamps)
+ * Stores userId + role + interviewType + questions (+ timestamps)
  */
 export async function createInterviewWithQuestions(params: {
   userId: string;
+  role: string;
+  interviewType: string;
   questions: string[];
 }) {
-  const { userId, questions } = params;
+  const { userId, role, interviewType, questions } = params;
 
   try {
-    const interviewRef = db.collection("interviews").doc(); // NEW unique ID
+    const interviewRef = db.collection("interviews").doc();
 
     await interviewRef.set({
       userId,
+      role,
+      interviewType,
       questions,
       finalized: true,
       createdAt: new Date().toISOString(),
