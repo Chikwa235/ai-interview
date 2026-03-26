@@ -1,66 +1,112 @@
 "use server";
 
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
-
+import { openai } from "@ai-sdk/openai";
 import { db } from "@/firebase/admin";
 import { feedbackSchema } from "@/constants";
 
 /**
- * FEEDBACK
+ * FEEDBACK (write) - OpenAI version
+ * Always writes to top-level `feedback` collection:
+ * 1) immediately create doc with status=processing
+ * 2) attempt OpenAI structured output
+ * 3) update doc with complete/error
+ *
+ * Also updates the corresponding interview doc with latestScore + latestFeedbackId
+ * so homepage cards can display the score.
  */
 export async function createFeedback(params: CreateFeedbackParams) {
   const { interviewId, userId, transcript, feedbackId } = params;
 
+  const feedbackRef = feedbackId
+    ? db.collection("feedback").doc(feedbackId)
+    : db.collection("feedback").doc();
+
+  // Write immediately so the collection/doc exists even if OpenAI fails
+  await feedbackRef.set({
+    interviewId,
+    userId,
+    status: "processing",
+    createdAt: new Date().toISOString(),
+    transcriptMessageCount: transcript?.length ?? 0,
+  });
+
   try {
-    const formattedTranscript = transcript
+    const formattedTranscript = (transcript ?? [])
       .map(
         (sentence: { role: string; content: string }) =>
           `- ${sentence.role}: ${sentence.content}\n`
       )
       .join("");
 
+    if (!formattedTranscript.trim() || (transcript?.length ?? 0) < 2) {
+      await feedbackRef.set(
+        {
+          status: "error",
+          errorMessage: "Transcript was empty/too short to generate feedback.",
+          completedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      return { success: true, feedbackId: feedbackRef.id };
+    }
+
     const { object } = await generateObject({
-      model: google("gemini-2.0-flash-001", { structuredOutputs: false }),
+      model: openai("gpt-4o-mini"),
       schema: feedbackSchema,
+      system:
+        "You are a professional interviewer. Return JSON that matches the schema exactly.",
       prompt: `
-You are an AI interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories. Be thorough and detailed in your analysis. Don't be lenient with the candidate. If there are mistakes or areas for improvement, point them out.
+You are an AI interviewer analyzing a mock interview. Evaluate the candidate strictly.
 
 Transcript:
 ${formattedTranscript}
 
-Please score the candidate from 0 to 100 in the following areas. Do not add categories other than the ones provided:
-- Communication Skills: Clarity, articulation, structured responses.
-- Technical Knowledge: Understanding of key concepts for the role.
-- Problem-Solving: Ability to analyze problems and propose solutions.
-- Cultural & Role Fit: Alignment with company values and job role.
-- Confidence & Clarity: Confidence in responses, engagement, and clarity.
+Return the result as JSON that matches the schema exactly.
+Make sure categoryScores contains the required categories exactly as defined in the schema.
       `,
-      system:
-        "You are a professional interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories.",
     });
 
-    const feedback = {
-      interviewId,
-      userId,
-      totalScore: object.totalScore,
-      categoryScores: object.categoryScores,
-      strengths: object.strengths,
-      areasForImprovement: object.areasForImprovement,
-      finalAssessment: object.finalAssessment,
-      createdAt: new Date().toISOString(),
-    };
+    await feedbackRef.set(
+      {
+        status: "complete",
+        totalScore: object.totalScore,
+        categoryScores: object.categoryScores,
+        strengths: object.strengths,
+        areasForImprovement: object.areasForImprovement,
+        finalAssessment: object.finalAssessment,
+        completedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
 
-    const feedbackRef = feedbackId
-      ? db.collection("feedback").doc(feedbackId)
-      : db.collection("feedback").doc();
-
-    await feedbackRef.set(feedback);
+    // ✅ NEW: Update interview doc so cards can show the score
+    await db
+      .collection("interviews")
+      .doc(interviewId)
+      .set(
+        {
+          latestScore: object.totalScore,
+          latestFeedbackId: feedbackRef.id,
+          latestFeedbackAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
 
     return { success: true, feedbackId: feedbackRef.id };
-  } catch (error) {
-    console.error("Error saving feedback:", error);
-    return { success: false };
+  } catch (error: any) {
+    await feedbackRef.set(
+      {
+        status: "error",
+        errorMessage: error?.message ?? String(error),
+        completedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    return { success: true, feedbackId: feedbackRef.id };
   }
 }
 
@@ -114,7 +160,7 @@ export async function getInterviewsByUserId(
 }
 
 /**
- * FEEDBACK (read)
+ * FEEDBACK (read) - NEWEST FIRST
  */
 export async function getFeedbackByInterviewId(
   params: GetFeedbackByInterviewIdParams
@@ -125,6 +171,7 @@ export async function getFeedbackByInterviewId(
     .collection("feedback")
     .where("interviewId", "==", interviewId)
     .where("userId", "==", userId)
+    .orderBy("createdAt", "desc") // ✅ NEW: get newest feedback
     .limit(1)
     .get();
 
@@ -159,8 +206,6 @@ export async function saveInterviewQuestions(params: {
 
 /**
  * NEW: Each generated set becomes its own Interview document with a unique ID
- * Path: interviews/{newInterviewId}
- * Stores userId + role + interviewType + questions (+ timestamps)
  */
 export async function createInterviewWithQuestions(params: {
   userId: string;

@@ -10,6 +10,7 @@ import {
   createFeedback,
   createInterviewWithQuestions,
 } from "@/lib/actions/general.action";
+
 enum CallStatus {
   INACTIVE = "INACTIVE",
   CONNECTING = "CONNECTING",
@@ -88,10 +89,6 @@ function extractQuestionsFromTranscript(messages: SavedMessage[]) {
   return Array.from(new Set(cleaned)).slice(0, 20);
 }
 
-/**
- * Extract role + interviewType from the transcript.
- * We find the assistant's prompts and the user's answers right after them.
- */
 function extractRoleAndType(messages: SavedMessage[]) {
   const msgs = messages
     .map((m) => ({ ...m, content: (m.content ?? "").trim() }))
@@ -103,10 +100,8 @@ function extractRoleAndType(messages: SavedMessage[]) {
       const a = msgs[i].content.toLowerCase();
 
       if (promptIncludes.some((p) => a.includes(p))) {
-        // find next user message
         for (let j = i + 1; j < msgs.length; j++) {
           if (msgs[j].role === "user") return msgs[j].content;
-          // stop if assistant speaks again without user answering
           if (msgs[j].role === "assistant") break;
         }
       }
@@ -126,7 +121,6 @@ function extractRoleAndType(messages: SavedMessage[]) {
     "technical or behavioral",
   ]);
 
-  // Normalize type
   const t = interviewTypeRaw.toLowerCase();
   let interviewType = interviewTypeRaw;
   if (t.includes("tech")) interviewType = "technical";
@@ -199,6 +193,10 @@ const Agent = ({
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
+      // ✅ KEY FIX: Wait for Vapi to flush final transcript chunks after stop()
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // GENERATE MODE -> create a new interview doc with questions
       if (type === "generate") {
         if (!userId) {
           router.push("/");
@@ -213,28 +211,43 @@ const Agent = ({
 
         const { role, interviewType } = extractRoleAndType(messages);
 
-        const res = await createInterviewWithQuestions({
+        await createInterviewWithQuestions({
           userId,
           role,
           interviewType,
           questions: extractedQuestions,
         });
 
-        if (res.success && res.interviewId) router.push("/");
-        else router.push("/");
-
+        router.push("/");
         return;
       }
 
-      const { success, feedbackId: id } = await createFeedback({
-        interviewId: interviewId!,
-        userId: userId!,
-        transcript: messages,
-        feedbackId,
+      // FEEDBACK MODE -> create feedback for an existing interview
+      console.log("ABOUT TO CREATE FEEDBACK", {
+        type,
+        interviewId,
+        userId,
+        messages: messages.length,
       });
 
-      if (success && id) router.push(`/interview/${interviewId}/feedback`);
-      else router.push("/");
+      try {
+        const res = await createFeedback({
+          interviewId: interviewId!,
+          userId: userId!,
+          transcript: messages,
+          feedbackId,
+        });
+
+        console.log("createFeedback result:", res);
+
+        // ✅ KEY FIX: Always go to feedback page after interview ends
+        router.push(`/interview/${interviewId}/feedback`);
+      } catch (e) {
+        console.error("createFeedback threw:", e);
+
+        // ✅ Still go to feedback page; page can show "not found/error"
+        router.push(`/interview/${interviewId}/feedback`);
+      }
     };
 
     runOnFinish();
