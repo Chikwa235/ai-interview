@@ -22,7 +22,6 @@ export async function createFeedback(params: CreateFeedbackParams) {
     ? db.collection("feedback").doc(feedbackId)
     : db.collection("feedback").doc();
 
-  // Write immediately so the collection/doc exists even if OpenAI fails
   await feedbackRef.set({
     interviewId,
     userId,
@@ -81,13 +80,14 @@ Make sure categoryScores contains the required categories exactly as defined in 
       { merge: true }
     );
 
-    // ✅ NEW: Update interview doc so cards can show the score
+    // ✅ Update interview doc so cards can show score + summary
     await db
       .collection("interviews")
       .doc(interviewId)
       .set(
         {
           latestScore: object.totalScore,
+          latestFinalAssessment: object.finalAssessment,
           latestFeedbackId: feedbackRef.id,
           latestFeedbackAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -171,7 +171,7 @@ export async function getFeedbackByInterviewId(
     .collection("feedback")
     .where("interviewId", "==", interviewId)
     .where("userId", "==", userId)
-    .orderBy("createdAt", "desc") // ✅ NEW: get newest feedback
+    .orderBy("createdAt", "desc")
     .limit(1)
     .get();
 
@@ -212,8 +212,9 @@ export async function createInterviewWithQuestions(params: {
   role: string;
   interviewType: string;
   questions: string[];
+  techStack?: string[]; // ✅ NEW
 }) {
-  const { userId, role, interviewType, questions } = params;
+  const { userId, role, interviewType, questions, techStack = [] } = params;
 
   try {
     const interviewRef = db.collection("interviews").doc();
@@ -222,6 +223,7 @@ export async function createInterviewWithQuestions(params: {
       userId,
       role,
       interviewType,
+      techStack, // ✅ NEW
       questions,
       finalized: true,
       createdAt: new Date().toISOString(),

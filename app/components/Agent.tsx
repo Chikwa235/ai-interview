@@ -133,6 +133,45 @@ function extractRoleAndType(messages: SavedMessage[]) {
   };
 }
 
+function extractTechStack(messages: SavedMessage[]) {
+  const msgs = messages
+    .map((m) => ({ ...m, content: (m.content ?? "").trim() }))
+    .filter((m) => m.content.length > 0);
+
+  const findUserAnswerAfterAssistantPrompt = (promptIncludes: string[]) => {
+    for (let i = 0; i < msgs.length - 1; i++) {
+      if (msgs[i].role !== "assistant") continue;
+      const a = msgs[i].content.toLowerCase();
+
+      if (promptIncludes.some((p) => a.includes(p))) {
+        for (let j = i + 1; j < msgs.length; j++) {
+          if (msgs[j].role === "user") return msgs[j].content;
+          if (msgs[j].role === "assistant") break;
+        }
+      }
+    }
+    return "";
+  };
+
+  const techRaw = findUserAnswerAfterAssistantPrompt([
+    "tech stack",
+    "technologies",
+    "tools do you use",
+    "what tools do you use",
+    "what frameworks",
+    "what languages",
+  ]);
+
+  if (!techRaw) return [];
+
+  const parts = techRaw
+    .split(/,|\/|\n|\band\b|&/gi)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(parts)).slice(0, 12);
+}
+
 const Agent = ({
   userName,
   userId,
@@ -193,10 +232,9 @@ const Agent = ({
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
-      // ✅ KEY FIX: Wait for Vapi to flush final transcript chunks after stop()
+      // Wait for final transcript flush after stop()
       await new Promise((r) => setTimeout(r, 1500));
 
-      // GENERATE MODE -> create a new interview doc with questions
       if (type === "generate") {
         if (!userId) {
           router.push("/");
@@ -210,42 +248,32 @@ const Agent = ({
         }
 
         const { role, interviewType } = extractRoleAndType(messages);
+        const techStack = extractTechStack(messages);
 
         await createInterviewWithQuestions({
           userId,
           role,
           interviewType,
           questions: extractedQuestions,
+          techStack, // ✅ NEW
         });
 
         router.push("/");
         return;
       }
 
-      // FEEDBACK MODE -> create feedback for an existing interview
-      console.log("ABOUT TO CREATE FEEDBACK", {
-        type,
-        interviewId,
-        userId,
-        messages: messages.length,
-      });
-
+      // feedback mode
       try {
-        const res = await createFeedback({
+        await createFeedback({
           interviewId: interviewId!,
           userId: userId!,
           transcript: messages,
           feedbackId,
         });
 
-        console.log("createFeedback result:", res);
-
-        // ✅ KEY FIX: Always go to feedback page after interview ends
         router.push(`/interview/${interviewId}/feedback`);
       } catch (e) {
         console.error("createFeedback threw:", e);
-
-        // ✅ Still go to feedback page; page can show "not found/error"
         router.push(`/interview/${interviewId}/feedback`);
       }
     };
