@@ -1,76 +1,36 @@
-import Image from "next/image";
-import { cn } from "@/lib/utils";
-import { mappings } from "@/constants";
+import { cn, getTechLogos } from "@/lib/utils";
 
 type TechIconProps = {
   techStack?: string[];
 };
 
-function normalizeTech(input: string) {
-  const key = String(input || "").trim().toLowerCase();
-  return (mappings as any)[key] || key;
+function normalizeTechStackInput(techStack?: string[]) {
+  const arr = Array.isArray(techStack) ? techStack : [];
+
+  const flattened = arr.flatMap((item) => {
+    const s = String(item ?? "").trim();
+    if (!s) return [];
+
+    const hasStrongSeparators = /,|\/|\n|\band\b|&/i.test(s);
+
+    return s
+      .split(hasStrongSeparators ? /,|\/|\n|\band\b|&/gi : /\s+/g)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  });
+
+  return Array.from(new Set(flattened)).slice(0, 12);
 }
 
-/**
- * Map normalized tech -> filename in /public/covers
- * IMPORTANT: Update filenames here to match what you actually have.
- */
-const techToCoverFile: Record<string, string> = {
-  react: "react.png",
-  nextjs: "nextjs.png",
-  vue: "vue.png",
-  vuejs: "vue.png",
-  angular: "angular.png",
+const DisplayTechIcons = async ({ techStack }: TechIconProps) => {
+  const normalizedTechStack = normalizeTechStackInput(techStack);
+  const techIcons = await getTechLogos(normalizedTechStack);
 
-  node: "node.png",
-  nodejs: "node.png",
-  express: "express.png",
-
-  typescript: "typescript.png",
-  javascript: "javascript.png",
-
-  tailwind: "tailwind.png",
-  tailwindcss: "tailwind.png",
-
-  mongodb: "mongodb.png",
-  mysql: "mysql.png",
-  postgresql: "postgresql.png",
-  postgres: "postgresql.png",
-
-  firebase: "firebase.png",
-  prisma: "prisma.png",
-
-  docker: "docker.png",
-  kubernetes: "kubernetes.png",
-
-  aws: "aws.png",
-  azure: "azure.png",
-  gcp: "gcp.png",
-  googlecloud: "gcp.png",
-
-  graphql: "graphql.png",
-};
-
-function getCoverUrl(tech: string) {
-  const normalized = normalizeTech(tech).replace(/\s+/g, "");
-  const file = techToCoverFile[normalized];
-  if (!file) return null;
-  return `/covers/${file}`;
-}
-
-const DisplayTechIcons = ({ techStack }: TechIconProps) => {
-  const list = (techStack ?? []).filter(Boolean);
-
-  const items = list
-    .map((t) => ({ tech: t, url: getCoverUrl(t) }))
-    .filter((x): x is { tech: string; url: string } => Boolean(x.url))
-    .slice(0, 3);
-
-  if (items.length === 0) return null;
+  if (!techIcons?.length) return null;
 
   return (
     <div className="flex flex-row">
-      {items.map(({ tech, url }, index) => (
+      {techIcons.slice(0, 3).map(({ tech, url }, index) => (
         <div
           key={`${tech}-${index}`}
           className={cn(
@@ -80,7 +40,15 @@ const DisplayTechIcons = ({ techStack }: TechIconProps) => {
           title={tech}
         >
           <span className="tech-tooltip">{tech}</span>
-          <Image src={url} alt={tech} width={20} height={20} className="size-5" />
+          <img
+            src={url}
+            alt={tech}
+            width={20}
+            height={20}
+            className="size-5"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
         </div>
       ))}
     </div>

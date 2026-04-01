@@ -7,8 +7,10 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { vapi } from "@/lib/vapi.sdk";
 import {
+  createCompletedInterviewCard,
   createFeedback,
   createInterviewWithQuestions,
+  getInterviewById,
 } from "@/lib/actions/general.action";
 
 enum CallStatus {
@@ -23,7 +25,11 @@ interface SavedMessage {
   content: string;
 }
 
-const ASSISTANT_ID = "730f08f4-2641-4967-be8d-23d3c79d0eb3";
+// Generates questions (existing assistant)
+const GENERATOR_ASSISTANT_ID = "730f08f4-2641-4967-be8d-23d3c79d0eb3";
+
+// Runs the interview: asks provided questions, evaluates answers, ends call (new assistant)
+const INTERVIEW_ASSISTANT_ID = "0af42e2c-d7b6-4a2a-84d3-2af4a7993671";
 
 function extractQuestionsFromTranscript(messages: SavedMessage[]) {
   const assistantMsgs = messages
@@ -121,7 +127,7 @@ function extractRoleAndType(messages: SavedMessage[]) {
     "technical or behavioral",
   ]);
 
-  const t = interviewTypeRaw.toLowerCase();
+  const t = (interviewTypeRaw || "").toLowerCase();
   let interviewType = interviewTypeRaw;
   if (t.includes("tech")) interviewType = "technical";
   else if (t.includes("behav")) interviewType = "behavioral";
@@ -164,8 +170,11 @@ function extractTechStack(messages: SavedMessage[]) {
 
   if (!techRaw) return [];
 
-  const parts = techRaw
-    .split(/,|\/|\n|\band\b|&/gi)
+  const normalizedRaw = techRaw.trim();
+  const hasStrongSeparators = /,|\/|\n|\band\b|&/i.test(normalizedRaw);
+
+  const parts = normalizedRaw
+    .split(hasStrongSeparators ? /,|\/|\n|\band\b|&/gi : /\s+/g)
     .map((x) => x.trim())
     .filter(Boolean);
 
@@ -187,8 +196,14 @@ const Agent = ({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastMessage, setLastMessage] = useState<string>("");
 
+  const [everActive, setEverActive] = useState(false);
+
   useEffect(() => {
-    const onCallStart = () => setCallStatus(CallStatus.ACTIVE);
+    const onCallStart = () => {
+      setEverActive(true);
+      setCallStatus(CallStatus.ACTIVE);
+    };
+
     const onCallEnd = () => setCallStatus(CallStatus.FINISHED);
 
     const onMessage = (message: any) => {
@@ -204,8 +219,11 @@ const Agent = ({
     const onSpeechStart = () => setIsSpeaking(true);
     const onSpeechEnd = () => setIsSpeaking(false);
 
-    const onError = (error: Error) => {
-      console.log("Vapi Error:", error);
+    const onError = (error: any) => {
+      console.log("Vapi Error (raw):", error);
+      try {
+        console.log("Vapi Error (string):", JSON.stringify(error, null, 2));
+      } catch {}
       setCallStatus(CallStatus.FINISHED);
     };
 
@@ -232,9 +250,15 @@ const Agent = ({
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
-      // Wait for final transcript flush after stop()
+      // Only guard interview mode; generator should still save even if call-start didn't fire
+      if (type !== "generate" && !everActive) {
+  router.push("/");
+  return;
+}
+
       await new Promise((r) => setTimeout(r, 1500));
 
+      // GENERATE MODE
       if (type === "generate") {
         if (!userId) {
           router.push("/");
@@ -250,45 +274,78 @@ const Agent = ({
         const { role, interviewType } = extractRoleAndType(messages);
         const techStack = extractTechStack(messages);
 
-        await createInterviewWithQuestions({
+        const res = await createInterviewWithQuestions({
           userId,
           role,
           interviewType,
           questions: extractedQuestions,
-          techStack, // ✅ NEW
+          techStack,
         });
 
-        router.push("/");
+        if (res?.success && res?.interviewId) {
+          router.push(`/interview/${res.interviewId}`);
+        } else {
+          router.push("/");
+        }
+
         return;
       }
 
-      // feedback mode
+      // INTERVIEW MODE -> create feedback, then create a NEW interview card doc, then go home
       try {
-        await createFeedback({
+        const fb: any = await createFeedback({
           interviewId: interviewId!,
           userId: userId!,
           transcript: messages,
           feedbackId,
         });
 
-        router.push(`/interview/${interviewId}/feedback`);
+        const baseInterview = await getInterviewById(interviewId!);
+        if (baseInterview) {
+          await createCompletedInterviewCard({
+            userId: userId!,
+            role: baseInterview.role,
+            interviewType: (baseInterview as any).interviewType,
+            techStack: (baseInterview as any).techStack ?? [],
+            questions: (baseInterview as any).questions ?? [],
+            latestScore: fb?.totalScore ?? null,
+            latestFinalAssessment: fb?.finalAssessment ?? "",
+            latestFeedbackId: fb?.feedbackId ?? "",
+            sourceInterviewId: interviewId!,
+          });
+        }
       } catch (e) {
-        console.error("createFeedback threw:", e);
-        router.push(`/interview/${interviewId}/feedback`);
+        console.error("Interview completion flow error:", e);
+      } finally {
+        router.push("/");
       }
     };
 
     runOnFinish();
-  }, [messages, callStatus, feedbackId, interviewId, router, type, userId]);
+  }, [
+    messages,
+    callStatus,
+    everActive,
+    feedbackId,
+    interviewId,
+    router,
+    type,
+    userId,
+  ]);
 
   const handleCall = async () => {
     setMessages([]);
+    setEverActive(false);
     setCallStatus(CallStatus.CONNECTING);
 
+    // ✅ Send numbered list for interview runner assistant
     const formattedQuestions =
-      questions?.length ? questions.map((q) => `- ${q}`).join("\n") : "";
+      questions?.length ? questions.map((q, i) => `${i + 1}. ${q}`).join("\n") : "";
 
-    await vapi.start(ASSISTANT_ID, {
+    const assistantId =
+      type === "generate" ? GENERATOR_ASSISTANT_ID : INTERVIEW_ASSISTANT_ID;
+
+    await vapi.start(assistantId, {
       variableValues: {
         userName: userName ?? "",
         userId: userId ?? "",
@@ -300,7 +357,6 @@ const Agent = ({
   };
 
   const handleDisconnect = () => {
-    setCallStatus(CallStatus.FINISHED);
     vapi.stop();
   };
 

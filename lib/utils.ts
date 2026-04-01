@@ -9,14 +9,22 @@ export function cn(...inputs: ClassValue[]) {
 const techIconBaseURL = "https://cdn.jsdelivr.net/gh/devicons/devicon/icons";
 
 const normalizeTechName = (tech: string) => {
-  const key = tech.toLowerCase().replace(/\.js$/, "").replace(/\s+/g, "");
-  return mappings[key as keyof typeof mappings];
+  const raw = String(tech ?? "").trim().toLowerCase();
+
+  // remove common suffixes + spaces + punctuation
+  const key = raw
+    .replace(/\.js$/g, "")
+    .replace(/\s+/g, "")
+    .replace(/[^a-z0-9]/g, ""); // ✅ handles next.js, node.js, etc.
+
+  // ✅ fallback to key itself if mappings doesn't have it
+  return (mappings as any)[key] || key;
 };
 
 const checkIconExists = async (url: string) => {
   try {
     const response = await fetch(url, { method: "HEAD" });
-    return response.ok; // Returns true if the icon exists
+    return response.ok;
   } catch {
     return false;
   }

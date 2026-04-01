@@ -7,13 +7,10 @@ import { feedbackSchema } from "@/constants";
 
 /**
  * FEEDBACK (write) - OpenAI version
- * Always writes to top-level `feedback` collection:
- * 1) immediately create doc with status=processing
- * 2) attempt OpenAI structured output
- * 3) update doc with complete/error
+ * Writes to top-level `feedback` collection.
+ * Also updates the corresponding interview doc with latestScore + latestFeedbackId.
  *
- * Also updates the corresponding interview doc with latestScore + latestFeedbackId
- * so homepage cards can display the score.
+ * ✅ UPDATED: returns totalScore + finalAssessment so the client can create a new completed-card doc.
  */
 export async function createFeedback(params: CreateFeedbackParams) {
   const { interviewId, userId, transcript, feedbackId } = params;
@@ -48,7 +45,12 @@ export async function createFeedback(params: CreateFeedbackParams) {
         { merge: true }
       );
 
-      return { success: true, feedbackId: feedbackRef.id };
+      return {
+        success: true,
+        feedbackId: feedbackRef.id,
+        totalScore: null,
+        finalAssessment: "",
+      };
     }
 
     const { object } = await generateObject({
@@ -80,7 +82,7 @@ Make sure categoryScores contains the required categories exactly as defined in 
       { merge: true }
     );
 
-    // ✅ Update interview doc so cards can show score + summary
+    // ✅ Update interview doc so cards can show score + summary (existing behavior)
     await db
       .collection("interviews")
       .doc(interviewId)
@@ -95,7 +97,12 @@ Make sure categoryScores contains the required categories exactly as defined in 
         { merge: true }
       );
 
-    return { success: true, feedbackId: feedbackRef.id };
+    return {
+      success: true,
+      feedbackId: feedbackRef.id,
+      totalScore: object.totalScore,
+      finalAssessment: object.finalAssessment,
+    };
   } catch (error: any) {
     await feedbackRef.set(
       {
@@ -106,7 +113,12 @@ Make sure categoryScores contains the required categories exactly as defined in 
       { merge: true }
     );
 
-    return { success: true, feedbackId: feedbackRef.id };
+    return {
+      success: true,
+      feedbackId: feedbackRef.id,
+      totalScore: null,
+      finalAssessment: "",
+    };
   }
 }
 
@@ -212,7 +224,7 @@ export async function createInterviewWithQuestions(params: {
   role: string;
   interviewType: string;
   questions: string[];
-  techStack?: string[]; // ✅ NEW
+  techStack?: string[];
 }) {
   const { userId, role, interviewType, questions, techStack = [] } = params;
 
@@ -223,7 +235,7 @@ export async function createInterviewWithQuestions(params: {
       userId,
       role,
       interviewType,
-      techStack, // ✅ NEW
+      techStack,
       questions,
       finalized: true,
       createdAt: new Date().toISOString(),
@@ -233,6 +245,61 @@ export async function createInterviewWithQuestions(params: {
     return { success: true, interviewId: interviewRef.id };
   } catch (error) {
     console.error("Error creating interview with questions:", error);
+    return { success: false };
+  }
+}
+
+/**
+ * ✅ NEW: Create a brand-new Interview doc as a "completed attempt" card
+ * This is what makes a NEW card appear on the homepage after every interview run.
+ */
+export async function createCompletedInterviewCard(params: {
+  userId: string;
+  role: string;
+  interviewType: string;
+  techStack: string[];
+  questions: string[];
+  latestScore?: number | null;
+  latestFinalAssessment?: string;
+  latestFeedbackId?: string;
+  sourceInterviewId?: string;
+}) {
+  const {
+    userId,
+    role,
+    interviewType,
+    techStack,
+    questions,
+    latestScore,
+    latestFinalAssessment,
+    latestFeedbackId,
+    sourceInterviewId,
+  } = params;
+
+  try {
+    const interviewRef = db.collection("interviews").doc();
+
+    await interviewRef.set({
+      userId,
+      role,
+      interviewType,
+      techStack,
+      questions,
+
+      // snapshot from completion
+      latestScore: latestScore ?? null,
+      latestFinalAssessment: latestFinalAssessment ?? "",
+      latestFeedbackId: latestFeedbackId ?? "",
+      sourceInterviewId: sourceInterviewId ?? "",
+
+      finalized: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    return { success: true, interviewId: interviewRef.id };
+  } catch (error) {
+    console.error("Error creating completed interview card:", error);
     return { success: false };
   }
 }
