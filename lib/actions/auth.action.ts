@@ -1,59 +1,65 @@
-'use server';
-import {db, auth} from "@/firebase/admin"
-import {cookies} from "next/headers"; 
-import { Collection } from "radix-ui/internal";
-import { success } from "zod";
+"use server";
+
+import { db, auth } from "@/firebase/admin";
+import { cookies } from "next/headers";
 
 const ONE_WEEK = 60 * 60 * 24 * 7;
 
 export async function signUp(params: SignUpParams) {
-    const { uid, name, email } = params;
+  const { uid, name, email } = params;
 
-    try {
-        const userRecord = await db.collection('users').doc(uid).get();
+  try {
+    const userRecord = await db.collection("users").doc(uid).get();
 
-          if (userRecord.exists){
-         return {
-            success: false,
-            message: "User already exists. Please sign in.",
-            }
-          }
-        await db.collection("users").doc(uid).set({
-            name, email
-             })
-
-            return {
-                success: true,
-                message: 'Account created successfully. Please sign in.'
-            }
-    } catch (e: any) {
-        console.error('Error creating a user', e);
-
-        if(e.code === 'auth/email-already-exists') {
-            return {
-                success: false,
-                message: 'This email is already in use.'
-            }
-        }
-
-        return {
-            success: false,
-            message: 'Failed to create an account'
-        }
+    if (userRecord.exists) {
+      return {
+        success: false,
+        message: "User already exists. Please sign in.",
+      };
     }
+
+    await db.collection("users").doc(uid).set({ name, email });
+
+    return {
+      success: true,
+      message: "Account created successfully. Please sign in.",
+    };
+  } catch (e: any) {
+    console.error("Error creating a user", e);
+
+    if (e.code === "auth/email-already-exists") {
+      return {
+        success: false,
+        message: "This email is already in use.",
+      };
+    }
+
+    return {
+      success: false,
+      message: "Failed to create an account",
+    };
+  }
 }
 
 export async function signIn(params: SignInParams) {
   const { email, idToken } = params;
 
-    try {
+  try {
     const userRecord = await auth.getUserByEmail(email);
-    if (!userRecord)
+
+    if (!userRecord) {
       return {
         success: false,
         message: "User does not exist. Create an account.",
       };
-          await setSessionCookie(idToken);
+    }
+
+    await setSessionCookie(idToken);
+
+    return {
+      success: true,
+      message: "Signed in successfully.",
+    };
   } catch (e) {
     console.log(e);
 
@@ -64,26 +70,26 @@ export async function signIn(params: SignInParams) {
   }
 }
 
-
-
 export async function setSessionCookie(idToken: string) {
-    const cookieStore = await cookies();
+  const cookieStore = cookies(); // ✅ no await
 
-    const sessionCookie = await auth.createSessionCookie(idToken, {
-        expiresIn: ONE_WEEK * 1000,
-    })
+  const sessionCookie = await auth.createSessionCookie(idToken, {
+    expiresIn: ONE_WEEK * 1000,
+  });
 
-    cookieStore.set('session', sessionCookie, {
-        maxAge: ONE_WEEK,
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        sameSite: 'lax'
-    })
+  cookieStore.set("session", sessionCookie, {
+    maxAge: ONE_WEEK,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    sameSite: "lax",
+  });
+
+  return { success: true };
 }
 
 export async function getCurrentUser(): Promise<User | null> {
-  const cookieStore = await cookies();
+  const cookieStore = cookies(); // ✅ no await
 
   const sessionCookie = cookieStore.get("session")?.value;
   if (!sessionCookie) return null;
@@ -96,6 +102,7 @@ export async function getCurrentUser(): Promise<User | null> {
       .collection("users")
       .doc(decodedClaims.uid)
       .get();
+
     if (!userRecord.exists) return null;
 
     return {
@@ -104,8 +111,6 @@ export async function getCurrentUser(): Promise<User | null> {
     } as User;
   } catch (error) {
     console.log(error);
-
-    // Invalid or expired session
     return null;
   }
 }
@@ -116,30 +121,36 @@ export async function isAuthenticated() {
   return !!user;
 }
 
- export async function getInterviewsByUserId(userId: string): Promise<Interview[] | null> {
+export async function getInterviewsByUserId(
+  userId: string
+): Promise<Interview[] | null> {
   const interviews = await db
-    .collection('interviews')
-    .where('userId', '==', userId)
-    .orderBy('createdAt', 'desc')
+    .collection("interviews")
+    .where("userId", "==", userId)
+    .orderBy("createdAt", "desc")
     .get();
-  return interviews.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-  })) as Interview[];
- }
 
-  export async function getLatest(params: GetLatestInterviewsParams): Promise<Interview[] | null> {
+  return interviews.docs.map((doc) => ({
+    id: doc.id,
+    ...doc.data(),
+  })) as Interview[];
+}
+
+export async function getLatest(
+  params: GetLatestInterviewsParams
+): Promise<Interview[] | null> {
   const { userId, limit = 20 } = params;
 
   const interviews = await db
-    .collection('interviews')
-    .where('finalized', '==', true)
-    .where('userId', '!=', userId)
-    .orderBy('createdAt', 'desc')
-    .limit
+    .collection("interviews")
+    .where("finalized", "==", true)
+    .where("userId", "!=", userId)
+    .orderBy("createdAt", "desc")
+    .limit(limit) // ✅ fixed
     .get();
+
   return interviews.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
+    id: doc.id,
+    ...doc.data(),
   })) as Interview[];
- }
+}
