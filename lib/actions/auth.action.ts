@@ -71,7 +71,8 @@ export async function signIn(params: SignInParams) {
 }
 
 export async function setSessionCookie(idToken: string) {
-  const cookieStore = cookies();
+  // ✅ Next 16: cookies() is async
+  const cookieStore = await cookies();
 
   const sessionCookie = await auth.createSessionCookie(idToken, {
     expiresIn: ONE_WEEK * 1000,
@@ -81,15 +82,16 @@ export async function setSessionCookie(idToken: string) {
     maxAge: ONE_WEEK,
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    path: "/",
     sameSite: "lax",
+    path: "/",
   });
 
   return { success: true };
 }
 
 export async function getCurrentUser(): Promise<User | null> {
-  const cookieStore = cookies();
+  // ✅ Next 16: cookies() is async
+  const cookieStore = await cookies();
 
   const sessionCookie = cookieStore.get("session")?.value;
   if (!sessionCookie) return null;
@@ -140,7 +142,7 @@ export async function getLatest(
     .where("finalized", "==", true)
     .where("userId", "!=", userId)
     .orderBy("createdAt", "desc")
-    .limit(limit)
+    .limit(limit) // ✅ critical fix
     .get();
 
   return interviews.docs.map((doc) => ({
