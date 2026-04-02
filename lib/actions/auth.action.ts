@@ -71,7 +71,7 @@ export async function signIn(params: SignInParams) {
 }
 
 export async function setSessionCookie(idToken: string) {
-  const cookieStore = cookies(); // ✅ no await
+  const cookieStore = cookies();
 
   const sessionCookie = await auth.createSessionCookie(idToken, {
     expiresIn: ONE_WEEK * 1000,
@@ -89,7 +89,7 @@ export async function setSessionCookie(idToken: string) {
 }
 
 export async function getCurrentUser(): Promise<User | null> {
-  const cookieStore = cookies(); // ✅ no await
+  const cookieStore = cookies();
 
   const sessionCookie = cookieStore.get("session")?.value;
   if (!sessionCookie) return null;
@@ -97,12 +97,7 @@ export async function getCurrentUser(): Promise<User | null> {
   try {
     const decodedClaims = await auth.verifySessionCookie(sessionCookie, true);
 
-    // get user info from db
-    const userRecord = await db
-      .collection("users")
-      .doc(decodedClaims.uid)
-      .get();
-
+    const userRecord = await db.collection("users").doc(decodedClaims.uid).get();
     if (!userRecord.exists) return null;
 
     return {
@@ -115,7 +110,6 @@ export async function getCurrentUser(): Promise<User | null> {
   }
 }
 
-// Check if user is authenticated
 export async function isAuthenticated() {
   const user = await getCurrentUser();
   return !!user;
@@ -146,7 +140,7 @@ export async function getLatest(
     .where("finalized", "==", true)
     .where("userId", "!=", userId)
     .orderBy("createdAt", "desc")
-    .limit(limit) // ✅ fixed
+    .limit(limit)
     .get();
 
   return interviews.docs.map((doc) => ({
