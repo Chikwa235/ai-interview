@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { cn } from "@/lib/utils";
@@ -198,16 +198,26 @@ const Agent = ({
 
   const [everActive, setEverActive] = useState(false);
 
+  // ✅ cooldown after end/error to avoid “ejection / meeting ended” during cleanup
+  const [cooldownUntil, setCooldownUntil] = useState<number>(0);
+  const inCooldown = useMemo(() => Date.now() < cooldownUntil, [cooldownUntil]);
+
   useEffect(() => {
     const onCallStart = () => {
       setEverActive(true);
       setCallStatus(CallStatus.ACTIVE);
     };
 
-    const onCallEnd = () => setCallStatus(CallStatus.FINISHED);
+    const onCallEnd = () => {
+      setCallStatus(CallStatus.FINISHED);
+      setCooldownUntil(Date.now() + 1500);
+    };
 
     const onMessage = (message: any) => {
-      if (message?.type === "transcript" && message?.transcriptType === "final") {
+      if (
+        message?.type === "transcript" &&
+        message?.transcriptType === "final"
+      ) {
         const newMessage: SavedMessage = {
           role: message.role,
           content: message.transcript,
@@ -225,6 +235,7 @@ const Agent = ({
         console.log("Vapi Error (string):", JSON.stringify(error, null, 2));
       } catch {}
       setCallStatus(CallStatus.FINISHED);
+      setCooldownUntil(Date.now() + 1500);
     };
 
     vapi.on("call-start", onCallStart);
@@ -245,16 +256,17 @@ const Agent = ({
   }, []);
 
   useEffect(() => {
-    if (messages.length > 0) setLastMessage(messages[messages.length - 1].content);
+    if (messages.length > 0)
+      setLastMessage(messages[messages.length - 1].content);
 
     const runOnFinish = async () => {
       if (callStatus !== CallStatus.FINISHED) return;
 
       // Only guard interview mode; generator should still save even if call-start didn't fire
       if (type !== "generate" && !everActive) {
-  router.push("/");
-  return;
-}
+        router.push("/");
+        return;
+      }
 
       await new Promise((r) => setTimeout(r, 1500));
 
@@ -334,30 +346,71 @@ const Agent = ({
   ]);
 
   const handleCall = async () => {
+    // ✅ prevent double click / re-start while connecting/active
+    if (
+      callStatus === CallStatus.CONNECTING ||
+      callStatus === CallStatus.ACTIVE
+    )
+      return;
+
+    // ✅ prevent re-start while SDK is cleaning up
+    if (Date.now() < cooldownUntil) return;
+
+    // ✅ DIAGNOSIS: check public key is actually present in the browser
+    const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
+    if (!publicKey) {
+      console.error(
+        "NEXT_PUBLIC_VAPI_PUBLIC_KEY is missing in the browser. Add it to .env.local and restart `npm run dev`."
+      );
+      setCallStatus(CallStatus.FINISHED);
+      setCooldownUntil(Date.now() + 1500);
+      return;
+    }
+
+    // ✅ DIAGNOSIS: check mic permissions
+    const micPerm = await (navigator.permissions as any)
+      ?.query?.({ name: "microphone" })
+      .catch(() => null);
+    console.log("Mic permission:", micPerm?.state ?? "unknown");
+
     setMessages([]);
     setEverActive(false);
     setCallStatus(CallStatus.CONNECTING);
 
-    // ✅ Send numbered list for interview runner assistant
     const formattedQuestions =
-      questions?.length ? questions.map((q, i) => `${i + 1}. ${q}`).join("\n") : "";
+      questions?.length
+        ? questions.map((q, i) => `${i + 1}. ${q}`).join("\n")
+        : "";
 
     const assistantId =
       type === "generate" ? GENERATOR_ASSISTANT_ID : INTERVIEW_ASSISTANT_ID;
 
-    await vapi.start(assistantId, {
-      variableValues: {
-        userName: userName ?? "",
-        userId: userId ?? "",
-        interviewId: interviewId ?? "",
-        type: type ?? "",
-        questions: formattedQuestions,
-      },
-    });
+    console.log("Starting Vapi with assistantId:", assistantId);
+
+    try {
+      // ✅ IMPORTANT: do NOT call vapi.stop() here (can trigger Krisp/WASM cleanup issues)
+      await vapi.start(assistantId, {
+        variableValues: {
+          userName: userName ?? "",
+          userId: userId ?? "",
+          interviewId: interviewId ?? "",
+          type: type ?? "",
+          questions: formattedQuestions,
+        },
+      });
+    } catch (e) {
+      console.error("Failed to start Vapi call:", e);
+      setCallStatus(CallStatus.FINISHED);
+      setCooldownUntil(Date.now() + 1500);
+    }
   };
 
   const handleDisconnect = () => {
-    vapi.stop();
+    try {
+      vapi.stop();
+    } catch (e) {
+      console.warn("vapi.stop error (ignored):", e);
+    }
   };
 
   return (
@@ -409,7 +462,11 @@ const Agent = ({
 
       <div className="w-full flex justify-center">
         {callStatus !== "ACTIVE" ? (
-          <button className="relative btn-call" onClick={handleCall}>
+          <button
+            className="relative btn-call"
+            onClick={handleCall}
+            disabled={callStatus === "CONNECTING" || inCooldown}
+          >
             <span
               className={cn(
                 "absolute animate-ping rounded-full opacity-75",
@@ -418,7 +475,9 @@ const Agent = ({
             />
             <span className="relative">
               {callStatus === "INACTIVE" || callStatus === "FINISHED"
-                ? "Call"
+                ? inCooldown
+                  ? "Please wait..."
+                  : "Call"
                 : ". . ."}
             </span>
           </button>

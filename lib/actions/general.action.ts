@@ -251,7 +251,7 @@ export async function createInterviewWithQuestions(params: {
 
 /**
  * ✅ NEW: Create a brand-new Interview doc as a "completed attempt" card
- * This is what makes a NEW card appear on the homepage after every interview run.
+ * ✅ FIXED: Dedupe by latestFeedbackId so it never creates two cards for the same feedback.
  */
 export async function createCompletedInterviewCard(params: {
   userId: string;
@@ -277,6 +277,38 @@ export async function createCompletedInterviewCard(params: {
   } = params;
 
   try {
+    // ✅ If we have a feedbackId, ensure we only ever create ONE card for it.
+    if (latestFeedbackId) {
+      const existing = await db
+        .collection("interviews")
+        .where("userId", "==", userId)
+        .where("latestFeedbackId", "==", latestFeedbackId)
+        .limit(1)
+        .get();
+
+      if (!existing.empty) {
+        const doc = existing.docs[0];
+
+        // Optional: keep it updated (safe, idempotent)
+        await db.collection("interviews").doc(doc.id).set(
+          {
+            role,
+            interviewType,
+            techStack,
+            questions,
+            latestScore: latestScore ?? null,
+            latestFinalAssessment: latestFinalAssessment ?? "",
+            sourceInterviewId: sourceInterviewId ?? "",
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+
+        return { success: true, interviewId: doc.id, deduped: true };
+      }
+    }
+
+    // Otherwise create a new card
     const interviewRef = db.collection("interviews").doc();
 
     await interviewRef.set({
@@ -297,7 +329,7 @@ export async function createCompletedInterviewCard(params: {
       updatedAt: new Date().toISOString(),
     });
 
-    return { success: true, interviewId: interviewRef.id };
+    return { success: true, interviewId: interviewRef.id, deduped: false };
   } catch (error) {
     console.error("Error creating completed interview card:", error);
     return { success: false };
